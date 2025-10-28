@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>微信回调 URL 接口测试工具</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;line-height:1.4;margin:0;background:#f6f8fa;color:#111}
+    .container{max-width:900px;margin:32px auto;padding:20px;background:#fff;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.06)}
+    h1{margin:0 0 8px;font-size:20px}
+    p.lead{margin:0 0 18px;color:#444}
+    label{display:block;margin:12px 0 6px;font-weight:600}
+    input[type="text"], textarea, select{width:100%;padding:10px;border:1px solid #dfe3e8;border-radius:6px;font-size:14px}
+    .row{display:flex;gap:12px}
+    .col{flex:1}
+    button{padding:10px 14px;border-radius:6px;border:0;background:#1565c0;color:#fff;cursor:pointer}
+    button.secondary{background:#6c757d}
+    .small{font-size:13px;color:#666}
+    pre{background:#0f1724;color:#d1e7ff;padding:12px;border-radius:6px;overflow:auto}
+    .flex{display:flex;gap:8px;align-items:center}
+    .status{margin-top:12px;padding:10px;border-radius:6px;background:#f1f5f9;color:#0b3b66}
+    .note{margin-top:12px;padding:10px;background:#fff3cd;border:1px solid #ffeeba;border-radius:6px;color:#66512c}
+  </style>
+</head>
+<body>
+  <div class="container" role="main">
+    <h1>微信回调 URL 接口测试工具</h1>
+    <p class="lead">说明：其中 <strong>URL</strong> 是开发者用来接收微信消息和事件的接口 URL（回调地址）。在此页面可以填写回调地址与验证参数，并模拟微信发送消息进行测试。</p>
+
+    <label for="callbackUrl">回调 URL（接口 URL）</label>
+    <input id="callbackUrl" type="text" placeholder="https://yourdomain.com/wechat/callback" />
+
+    <div class="row">
+      <div class="col">
+        <label for="token">Token（在微信公众平台填写的 token）</label>
+        <input id="token" type="text" placeholder="填写与公众平台一致的 Token" />
+      </div>
+      <div class="col">
+        <label for="encodingAesKey">EncodingAESKey（可选，用于加解密）</label>
+        <input id="encodingAesKey" type="text" placeholder="EncodingAESKey (43 chars) 若启用加密消息则必填" />
+      </div>
+    </div>
+
+    <label for="appid">AppID（可选）</label>
+    <input id="appid" type="text" placeholder="公众号/小程序的 AppID (可选，便于日志查看)" />
+
+    <label for="msgType">示例消息类型</label>
+    <select id="msgType">
+      <option value="text">text（文本消息）</option>
+      <option value="event">event（事件推送：subscribe/unsubscribe）</option>
+    </select>
+
+    <label for="samplePayload">示例消息（XML） — 可编辑</label>
+    <textarea id="samplePayload" rows="8"></textarea>
+
+    <div style="margin-top:12px" class="flex">
+      <button id="generateBtn">生成并显示签名参数</button>
+      <button id="sendBtn">发送示例消息到回调 URL</button>
+      <button id="resetBtn" class="secondary">重置示例</button>
+    </div>
+
+    <div id="paramsArea" style="margin-top:12px;display:none;">
+      <label>生成的请求参数（将以 query string 方式附加到回调 URL）</label>
+      <pre id="paramsPre"></pre>
+    </div>
+
+    <div id="responseArea" style="margin-top:12px;display:none;">
+      <label>响应 / 测试结果</label>
+      <pre id="responsePre">等待发送...</pre>
+    </div>
+
+    <div class="note">
+      注意事项：<br/>
+      1) 微信服务器在验证回调 URL 时会发起 GET 请求，包含 query 参数：<code>signature, timestamp, nonce, echostr</code>。生产环境需按微信要求用 SHA1(token, timestamp, nonce) 校验签名并返回 echostr。<br/>
+      2) 微信向回调 URL 推送消息时会 POST XML 到该 URL，同时带上 query 参数（signature / timestamp / nonce / msg_signature 等）。<br/>
+      3) 浏览器端直接发送请求测试时，目标服务器必须允许跨域（CORS）。若无法跨域，请用服务器端或 curl 测试。
+    </div>
+
+    <div style="margin-top:16px">
+      <label class="small">示例请求格式（用于参考）：</label>
+      <pre>
+GET /wechat/callback?signature=SIGN&timestamp=TIMESTAMP&nonce=NONCE&echostr=ECHOSTR
+POST /wechat/callback?signature=SIGN&timestamp=TIMESTAMP&nonce=NONCE
+Content-Type: text/xml
+
+&lt;xml&gt;
+  &lt;ToUserName&gt;gh_xxx&lt;/ToUserName&gt;
+  &lt;FromUserName&gt;openid&lt;/FromUserName&gt;
+  &lt;CreateTime&gt;12345678&lt;/CreateTime&gt;
+  &lt;MsgType&gt;text&lt;/MsgType&gt;
+  &lt;Content&gt;hello&lt;/Content&gt;
+  &lt;MsgId&gt;1234567890123456&lt;/MsgId&gt;
+&lt;/xml&gt;
+      </pre>
+    </div>
+  </div>
+
+<script>
+  // 简单工具：生成随机 nonce / timestamp / echostr
+  function rndStr(len=8){
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    let s=''; for(let i=0;i<len;i++) s+=chars.charAt(Math.floor(Math.random()*chars.length));
+    return s;
+  }
+
+  // Web Crypto SHA-1，返回 hex
+  async function sha1Hex(message){
+    const enc = new TextEncoder();
+    const data = enc.encode(message);
+    const hash = await crypto.subtle.digest('SHA-1', data);
+    const bytes = Array.from(new Uint8Array(hash));
+    return bytes.map(b => b.toString(16).padStart(2,'0')).join('');
+  }
+
+  // 组合并生成 signature = sha1(sorted(token,timestamp,nonce).join(''))
+  async function genSignature(token, timestamp, nonce){
+    const arr = [token, String(timestamp), String(nonce)].sort();
+    const joined = arr.join('');
+    return sha1Hex(joined);
+  }
+
+  // DOM
+  const msgTypeEl = document.getElementById('msgType');
+  const sampleEl = document.getElementById('samplePayload');
+  const tokenEl = document.getElementById('token');
+  const urlEl = document.getElementById('callbackUrl');
+  const encodingEl = document.getElementById('encodingAesKey');
+  const appidEl = document.getElementById('appid');
+  const paramsPre = document.getElementById('paramsPre');
+  const paramsArea = document.getElementById('paramsArea');
+  const responseArea = document.getElementById('responseArea');
+  const responsePre = document.getElementById('responsePre');
+
+  // 初始化示例
+  function loadSample(){
+    const t = msgTypeEl.value;
+    const now = Math.floor(Date.now()/1000);
+    if(t==='text'){
+      sampleEl.value = `<xml>
+  <ToUserName><![CDATA[${appidEl.value || 'gh_xxxxxx'}]]></ToUserName>
+  <FromUserName><![CDATA[openid_example]]></FromUserName>
+  <CreateTime>${now}</CreateTime>
+  <MsgType><![CDATA[text]]></MsgType>
+  <Content><![CDATA[测试消息：你好]]></Content>
+  <MsgId>1234567890123456</MsgId>
+</xml>`;
+    } else {
+      sampleEl.value = `<xml>
+  <ToUserName><![CDATA[${appidEl.value || 'gh_xxxxxx'}]]></ToUserName>
+  <FromUserName><![CDATA[openid_example]]></FromUserName>
+  <CreateTime>${now}</CreateTime>
+  <MsgType><![CDATA[event]]></MsgType>
+  <Event><![CDATA[subscribe]]></Event>
+</xml>`;
+    }
+  }
+  msgTypeEl.addEventListener('change', loadSample);
+  appidEl.addEventListener('input', loadSample);
+  loadSample();
+
+  document.getElementById('generateBtn').addEventListener('click', async ()=>{
+    const token = tokenEl.value.trim() || 'token_example';
+    const timestamp = Math.floor(Date.now()/1000);
+    const nonce = rndStr(10);
+    const echostr = rndStr(16);
+    const signature = await genSignature(token, timestamp, nonce);
+    paramsArea.style.display = 'block';
+    paramsPre.textContent = `signature: ${signature}\ntimestamp: ${timestamp}\nnonce: ${nonce}\nechostr: ${echostr}\n\n验证 URL 示例（GET）:\n${urlEl.value || 'https://yourdomain.com/wechat/callback'}?signature=${signature}&timestamp=${timestamp}&nonce=${nonce}&echostr=${echostr}`;
+  });
+
+  document.getElementById('sendBtn').addEventListener('click', async ()=>{
+    responseArea.style.display = 'block';
+    responsePre.textContent = '发送中...';
+    const url = (urlEl.value||'').trim();
+    if(!url){ responsePre.textContent = '错误：请填写回调 URL。'; return; }
+
+    const token = tokenEl.value.trim() || 'token_example';
+    const timestamp = Math.floor(Date.now()/1000);
+    const nonce = rndStr(10);
+    const signature = await genSignature(token, timestamp, nonce);
+
+    // 构造发送 URL（带 query）
+    const sendUrl = new URL(url);
+    sendUrl.searchParams.set('signature', signature);
+    sendUrl.searchParams.set('timestamp', timestamp);
+    sendUrl.searchParams.set('nonce', nonce);
+
+    const body = sampleEl.value || '';
+    try{
+      const res = await fetch(sendUrl.toString(), {
+        method: 'POST',
+        mode: 'cors', // 目标需要允许 CORS
+        headers: {
+          'Content-Type': 'text/xml'
+        },
+        body: body
+      });
+      const text = await res.text();
+      responsePre.textContent = `HTTP ${res.status} ${res.statusText}\n\n响应体:\n${text}`;
+    }catch(err){
+      responsePre.textContent = `请求失败：${err.message}\n\n说明：浏览器端测试要求目标服务器支持 CORS；否则请在服务器端或命令行使用 curl 进行测试。\n\n示例 curl (不受 CORS 限制)：\n\ncurl -X POST '${sendUrl.toString()}' -H 'Content-Type: text/xml' --data-binary @sample.xml`;
+    }
+  });
+
+  document.getElementById('resetBtn').addEventListener('click', ()=>{
+    tokenEl.value=''; encodingEl.value=''; appidEl.value=''; urlEl.value='';
+    loadSample();
+    paramsArea.style.display='none'; responseArea.style.display='none';
+  });
+</script>
+</body>
+</html>
